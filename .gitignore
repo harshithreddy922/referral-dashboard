@@ -4,6 +4,7 @@ dist-check/
 build-verify/
 verify-detail-fix/
 verify-service-summary/
+verify-vercel-routing/
 .env
 .env.local
 npm-debug.log*
