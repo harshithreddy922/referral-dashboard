@@ -1,6 +1,9 @@
 node_modules/
 dist/
 dist-check/
+build-verify/
+verify-detail-fix/
+verify-service-summary/
 .env
 .env.local
 npm-debug.log*

@@ -42,6 +42,11 @@ function formatCurrency(value) {
   }).format(Number(value || 0));
 }
 
+function isZeroLike(value) {
+  if (value === undefined || value === null || value === '') return true;
+  return String(value).replace(/[^0-9.-]/g, '') === '0';
+}
+
 function getReferralId(row) {
   return row?.id ?? row?.referralId ?? row?._id;
 }
@@ -49,12 +54,33 @@ function getReferralId(row) {
 function normalizeData(payload) {
   const data = payload?.data ?? payload ?? {};
   const nested = data?.data ?? {};
+  const metrics = data.metrics ?? nested.metrics ?? [];
+  const serviceSummary = data.serviceSummary ?? nested.serviceSummary ?? {};
+  const referral = data.referral ?? nested.referral ?? {};
+  const referrals = data.referrals ?? nested.referrals ?? [];
+  const totalReferralMetric = metrics.find((metric) => metric.id === 'totalRef');
+  const totalReferralCount = totalReferralMetric?.value ?? String(referrals.length);
+  const totalReferralProfit = referrals.reduce(
+    (sum, row) => sum + Number(row?.profit || 0),
+    0,
+  );
 
   return {
-    metrics: data.metrics ?? nested.metrics ?? [],
-    serviceSummary: data.serviceSummary ?? nested.serviceSummary ?? {},
-    referral: data.referral ?? nested.referral ?? {},
-    referrals: data.referrals ?? nested.referrals ?? [],
+    metrics,
+    serviceSummary: {
+      service: serviceSummary.service ?? referrals[0]?.serviceName ?? '',
+      yourReferrals: isZeroLike(serviceSummary.yourReferrals)
+        ? totalReferralCount
+        : serviceSummary.yourReferrals,
+      activeReferrals: isZeroLike(serviceSummary.activeReferrals)
+        ? totalReferralCount
+        : serviceSummary.activeReferrals,
+      totalRefEarnings: isZeroLike(serviceSummary.totalRefEarnings)
+        ? formatCurrency(totalReferralProfit)
+        : serviceSummary.totalRefEarnings,
+    },
+    referral,
+    referrals,
   };
 }
 
@@ -214,14 +240,16 @@ function DashboardPage() {
   const [search, setSearch] = useState('');
   const [sort, setSort] = useState('desc');
   const [page, setPage] = useState(1);
-  const [loading, setLoading] = useState(true);
+  const [tableLoading, setTableLoading] = useState(true);
+  const [hasLoadedDashboard, setHasLoadedDashboard] = useState(false);
   const [error, setError] = useState('');
 
   useEffect(() => {
     const controller = new AbortController();
+    let isCurrent = true;
 
     async function fetchReferrals() {
-      setLoading(true);
+      setTableLoading(true);
       setError('');
 
       try {
@@ -243,19 +271,26 @@ function DashboardPage() {
         }
 
         const payload = await response.json();
+        if (!isCurrent) return;
         setDashboardData(normalizeData(payload));
+        setHasLoadedDashboard(true);
         setPage(1);
       } catch (err) {
-        if (err.name !== 'AbortError') {
+        if (isCurrent && err.name !== 'AbortError') {
           setError(err?.message || 'Unable to load referrals.');
         }
       } finally {
-        setLoading(false);
+        if (isCurrent) {
+          setTableLoading(false);
+        }
       }
     }
 
     fetchReferrals();
-    return () => controller.abort();
+    return () => {
+      isCurrent = false;
+      controller.abort();
+    };
   }, [search, sort]);
 
   const totalEntries = dashboardData.referrals.length;
@@ -280,14 +315,16 @@ function DashboardPage() {
           </div>
         </section>
 
-        {loading ? <p className="state-message">Loading referrals...</p> : null}
-        {error ? (
+        {!hasLoadedDashboard && tableLoading ? (
+          <p className="state-message">Loading referrals...</p>
+        ) : null}
+        {error && !hasLoadedDashboard ? (
           <p className="error-banner" role="alert">
             {error}
           </p>
         ) : null}
 
-        {!loading && !error ? (
+        {hasLoadedDashboard ? (
           <>
             <section
               className="section-panel"
@@ -365,7 +402,13 @@ function DashboardPage() {
                 </div>
               </div>
 
-              <ReferralsTable rows={pageRows} />
+              {error ? (
+                <p className="error-banner table-error" role="alert">
+                  {error}
+                </p>
+              ) : null}
+
+              <ReferralsTable rows={pageRows} isLoading={tableLoading} />
 
               <div className="pagination-row">
                 <p>
@@ -449,7 +492,7 @@ function CopyField({ label, value = '' }) {
   );
 }
 
-function ReferralsTable({ rows }) {
+function ReferralsTable({ rows, isLoading }) {
   const navigate = useNavigate();
 
   return (
@@ -464,7 +507,13 @@ function ReferralsTable({ rows }) {
           </tr>
         </thead>
         <tbody>
-          {rows.length > 0 ? (
+          {isLoading ? (
+            <tr>
+              <td colSpan="4" className="empty-state">
+                Loading matching entries...
+              </td>
+            </tr>
+          ) : rows.length > 0 ? (
             rows.map((row) => (
               <tr
                 key={getReferralId(row)}
@@ -504,10 +553,12 @@ function ReferralDetailPage() {
 
   useEffect(() => {
     const controller = new AbortController();
+    let isCurrent = true;
 
     async function fetchReferral() {
       setLoading(true);
       setError('');
+      setReferral(null);
 
       try {
         const params = new URLSearchParams({ id });
@@ -522,18 +573,24 @@ function ReferralDetailPage() {
 
         const payload = await response.json();
         const matchedReferral = normalizeDetail(payload, id);
+        if (!isCurrent) return;
         setReferral(matchedReferral || null);
       } catch (err) {
-        if (err.name !== 'AbortError') {
+        if (isCurrent && err.name !== 'AbortError') {
           setError(err?.message || 'Unable to load referral.');
         }
       } finally {
-        setLoading(false);
+        if (isCurrent) {
+          setLoading(false);
+        }
       }
     }
 
     fetchReferral();
-    return () => controller.abort();
+    return () => {
+      isCurrent = false;
+      controller.abort();
+    };
   }, [id]);
 
   return (
